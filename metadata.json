@@ -1,0 +1,8 @@
+{
+  "name": "SnapSpends",
+  "description": "Chụp ảnh để ghi nhận chi tiêu theo dạng timeline trong ngày.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}

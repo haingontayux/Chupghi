@@ -1,0 +1,17 @@
+{
+  "name": "SnapSpends",
+  "short_name": "SnapSpends",
+  "description": "Ứng dụng quản lý chi tiêu thông minh",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f9fafb",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

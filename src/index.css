@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+@layer base {
+  html, body {
+    /* Prevent pull-to-refresh on mobile */
+    overscroll-behavior-y: none;
+    /* Prevent text selection */
+    -webkit-user-select: none;
+    user-select: none;
+    /* Remove tap highlight */
+    -webkit-tap-highlight-color: transparent;
+  }
+  
+  /* Allow text selection in inputs */
+  input, textarea {
+    -webkit-user-select: auto;
+    user-select: auto;
+  }
+}
