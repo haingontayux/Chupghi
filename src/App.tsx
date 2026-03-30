@@ -418,59 +418,72 @@ export default function App() {
                       <Icon className="w-4 h-4" />
                     </div>
                     
-                    <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-50">
-                      <div className="flex justify-between items-start mb-2">
-                        <div>
-                          <h3 className="font-medium text-gray-900">{tx.category}</h3>
-                          <p className="text-xs text-gray-400 mt-0.5">
-                            {format(tx.timestamp, 'HH:mm')}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className={cn("font-medium", isIncome ? "text-green-600" : "text-red-600")}>
-                            {isIncome ? '+' : '-'}{formatCurrency(tx.amount)}
-                          </span>
-                          <div className="flex items-center gap-1 -mr-2">
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); handleEdit(tx); }}
-                              className="text-gray-300 hover:text-blue-500 transition-colors p-1.5"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(tx.id); }}
-                              className="text-gray-300 hover:text-red-500 transition-colors p-1.5"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      {tx.description && (
-                        <p className="text-sm text-gray-600 mb-2">{tx.description}</p>
+                    <div 
+                      className={cn(
+                        "bg-white rounded-2xl shadow-sm border border-gray-50 overflow-hidden relative",
+                        tx.imageUrl ? "aspect-[4/3] cursor-pointer active:scale-[0.98] transition-transform" : "p-4"
                       )}
-                      
-                      {tx.location && (
-                        <p className="text-xs text-gray-500 mb-3 flex items-center gap-1">
-                          <MapPin className="w-3 h-3" />
-                          {tx.location}
-                        </p>
-                      )}
-                      
+                      onClick={() => tx.imageUrl && setSelectedImage(tx.imageUrl)}
+                    >
                       {tx.imageUrl && (
-                        <div 
-                          className="mt-3 rounded-xl overflow-hidden h-32 bg-gray-100 cursor-pointer active:scale-95 transition-transform"
-                          onClick={() => setSelectedImage(tx.imageUrl)}
-                        >
+                        <>
                           <img 
                             src={tx.imageUrl} 
                             alt="Receipt" 
-                            className="w-full h-full object-cover"
+                            className="absolute inset-0 w-full h-full object-cover"
                             referrerPolicy="no-referrer"
                           />
-                        </div>
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/60" />
+                        </>
                       )}
+                      
+                      <div className={cn(
+                        "relative h-full flex flex-col",
+                        tx.imageUrl ? "p-4 text-white justify-between" : ""
+                      )}>
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                            <h3 className={cn("font-medium", tx.imageUrl ? "text-white drop-shadow-md" : "text-gray-900")}>{tx.category}</h3>
+                            <p className={cn("text-xs mt-0.5", tx.imageUrl ? "text-gray-300 drop-shadow-md" : "text-gray-400")}>
+                              {format(tx.timestamp, 'HH:mm')}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className={cn("font-medium", 
+                              isIncome ? (tx.imageUrl ? "text-green-400 drop-shadow-md" : "text-green-600") : (tx.imageUrl ? "text-red-400 drop-shadow-md" : "text-red-600")
+                            )}>
+                              {isIncome ? '+' : '-'}{formatCurrency(tx.amount)}
+                            </span>
+                            <div className="flex items-center gap-1 -mr-2">
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleEdit(tx); }}
+                                className={cn("transition-colors p-1.5", tx.imageUrl ? "text-white/80 hover:text-white drop-shadow-md" : "text-gray-300 hover:text-blue-500")}
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(tx.id); }}
+                                className={cn("transition-colors p-1.5", tx.imageUrl ? "text-white/80 hover:text-red-400 drop-shadow-md" : "text-gray-300 hover:text-red-500")}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <div className={cn("mt-auto", tx.imageUrl ? "" : "")}>
+                          {tx.description && (
+                            <p className={cn("text-sm mb-2", tx.imageUrl ? "text-gray-200 line-clamp-2 drop-shadow-md" : "text-gray-600")}>{tx.description}</p>
+                          )}
+                          
+                          {tx.location && (
+                            <p className={cn("text-xs flex items-center gap-1", tx.imageUrl ? "text-gray-300 drop-shadow-md" : "text-gray-500 mb-3")}>
+                              <MapPin className="w-3 h-3" />
+                              <span className="truncate">{tx.location}</span>
+                            </p>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </motion.div>
                 );
