@@ -7,6 +7,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip, BarChart, Ba
 import exifr from 'exifr';
 import { cn, formatCurrency, fileToBase64, compressImage } from './lib/utils';
 import { Transaction, EXPENSE_CATEGORIES, INCOME_CATEGORIES } from './types';
+import { get, set } from 'idb-keyval';
 
 const CategoryIcons: Record<string, any> = {
   "Ăn uống": Coffee,
@@ -28,10 +29,8 @@ const CategoryIcons: Record<string, any> = {
 type Tab = 'timeline' | 'gallery' | 'report';
 
 export default function App() {
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    const saved = localStorage.getItem('snapspends_transactions');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   const [currentTab, setCurrentTab] = useState<Tab>('timeline');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -54,6 +53,7 @@ export default function App() {
   const [showKeypad, setShowKeypad] = useState(false);
   const [description, setDescription] = useState<string>('');
   const [location, setLocation] = useState<string>('');
+  const [showLocationSuggestions, setShowLocationSuggestions] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const touchStartX = useRef<number | null>(null);
@@ -63,13 +63,40 @@ export default function App() {
   }, [initialBalance]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('snapspends_transactions', JSON.stringify(transactions));
-    } catch (e) {
-      console.error("Lỗi lưu trữ:", e);
-      alert("Bộ nhớ tạm của trình duyệt đã đầy! Vui lòng xóa bớt các giao dịch cũ có ảnh để lưu thêm.");
-    }
-  }, [transactions]);
+    const loadData = async () => {
+      try {
+        const saved = await get('snapspends_transactions');
+        if (saved) {
+          setTransactions(saved);
+        } else {
+          const localSaved = localStorage.getItem('snapspends_transactions');
+          if (localSaved) {
+            const parsed = JSON.parse(localSaved);
+            setTransactions(parsed);
+            await set('snapspends_transactions', parsed);
+          }
+        }
+      } catch (e) {
+        console.error("Lỗi tải dữ liệu:", e);
+      } finally {
+        setIsLoaded(true);
+      }
+    };
+    loadData();
+  }, []);
+
+  useEffect(() => {
+    if (!isLoaded) return;
+    const saveData = async () => {
+      try {
+        await set('snapspends_transactions', transactions);
+      } catch (e) {
+        console.error("Lỗi lưu trữ:", e);
+        alert("Bộ nhớ của thiết bị đã đầy! Không thể lưu thêm giao dịch.");
+      }
+    };
+    saveData();
+  }, [transactions, isLoaded]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -660,6 +687,21 @@ export default function App() {
     );
   };
 
+  const uniqueLocations = Array.from(new Set(transactions.map(t => t.location).filter(Boolean))) as string[];
+
+  const renderHighlightedText = (text: string, highlight: string) => {
+    if (!highlight.trim()) return <span>{text}</span>;
+    const regex = new RegExp(`(${highlight})`, 'gi');
+    const parts = text.split(regex);
+    return (
+      <span>
+        {parts.map((part, i) => 
+          regex.test(part) ? <span key={i} className="font-semibold text-gray-900">{part}</span> : <span key={i}>{part}</span>
+        )}
+      </span>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 pb-24 font-sans">
       
@@ -951,16 +993,44 @@ export default function App() {
                 </div>
 
                 {/* Location Input */}
-                <div>
+                <div className="relative">
                   <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Địa điểm (Tùy chọn)</label>
                   <input 
                     type="text" 
                     value={location}
-                    onChange={(e) => setLocation(e.target.value)}
-                    onFocus={() => setShowKeypad(false)}
+                    onChange={(e) => {
+                      setLocation(e.target.value);
+                      setShowLocationSuggestions(true);
+                    }}
+                    onFocus={() => {
+                      setShowKeypad(false);
+                      setShowLocationSuggestions(true);
+                    }}
+                    onBlur={() => {
+                      setTimeout(() => setShowLocationSuggestions(false), 200);
+                    }}
                     placeholder="VD: Quán cafe, siêu thị..."
                     className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-300 transition-all"
                   />
+                  {showLocationSuggestions && uniqueLocations.filter(loc => loc.toLowerCase().includes(location.toLowerCase()) && loc !== location).length > 0 && (
+                    <div className="absolute z-50 w-full mt-1 bg-white border border-gray-100 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                      {uniqueLocations
+                        .filter(loc => loc.toLowerCase().includes(location.toLowerCase()) && loc !== location)
+                        .map((loc, idx) => (
+                          <div 
+                            key={idx}
+                            className="px-4 py-3 hover:bg-gray-50 cursor-pointer text-sm text-gray-500 border-b border-gray-50 last:border-0"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              setLocation(loc);
+                              setShowLocationSuggestions(false);
+                            }}
+                          >
+                            {renderHighlightedText(loc, location)}
+                          </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 
