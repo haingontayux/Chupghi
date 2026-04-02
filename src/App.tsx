@@ -27,12 +27,15 @@ const CategoryIcons: Record<string, any> = {
 };
 
 type Tab = 'timeline' | 'gallery' | 'report';
+type ReportPeriod = 'this_month' | 'last_month' | 'this_year' | 'all_time';
 
 export default function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
 
   const [currentTab, setCurrentTab] = useState<Tab>('timeline');
+  const [reportPeriod, setReportPeriod] = useState<ReportPeriod>('this_month');
+  const [reportType, setReportType] = useState<'expense' | 'income'>('expense');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentImage, setCurrentImage] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -625,19 +628,94 @@ export default function App() {
   };
 
   const renderReport = () => {
-    const expenseData = EXPENSE_CATEGORIES.map(cat => ({
+    const now = new Date();
+    
+    const filteredTransactions = transactions.filter(t => {
+      const txDate = new Date(t.timestamp);
+      switch (reportPeriod) {
+        case 'this_month':
+          return txDate.getMonth() === now.getMonth() && txDate.getFullYear() === now.getFullYear();
+        case 'last_month':
+          const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+          return txDate.getMonth() === lastMonth.getMonth() && txDate.getFullYear() === lastMonth.getFullYear();
+        case 'this_year':
+          return txDate.getFullYear() === now.getFullYear();
+        case 'all_time':
+        default:
+          return true;
+      }
+    });
+
+    const categories = reportType === 'expense' ? EXPENSE_CATEGORIES : INCOME_CATEGORIES;
+    
+    const categoryData = categories.map(cat => ({
       name: cat,
-      value: transactions.filter(t => t.type === 'expense' && t.category === cat).reduce((sum, t) => sum + t.amount, 0)
+      value: filteredTransactions.filter(t => t.type === reportType && t.category === cat).reduce((sum, t) => sum + t.amount, 0)
     })).filter(d => d.value > 0).sort((a, b) => b.value - a.value);
 
-    const COLORS = ['#ef4444', '#f97316', '#f59e0b', '#84cc16', '#10b981', '#06b6d4', '#3b82f6', '#8b5cf6', '#d946ef'];
+    const COLORS = reportType === 'expense' 
+      ? ['#ef4444', '#f97316', '#f59e0b', '#84cc16', '#10b981', '#06b6d4', '#3b82f6', '#8b5cf6', '#d946ef']
+      : ['#10b981', '#059669', '#047857', '#34d399', '#6ee7b7', '#a7f3d0'];
 
-    const totalIncome = transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
-    const totalExpense = transactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
+    const totalIncome = filteredTransactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
+    const totalExpense = filteredTransactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
+
+    // Prepare data for BarChart (Trend)
+    let trendData: any[] = [];
+    if (reportPeriod === 'this_month' || reportPeriod === 'last_month') {
+      // Group by day
+      const daysInMonth = new Date(
+        reportPeriod === 'this_month' ? now.getFullYear() : now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear(),
+        reportPeriod === 'this_month' ? now.getMonth() + 1 : now.getMonth(),
+        0
+      ).getDate();
+      
+      for (let i = 1; i <= daysInMonth; i++) {
+        const dayTxs = filteredTransactions.filter(t => new Date(t.timestamp).getDate() === i);
+        trendData.push({
+          name: `${i}`,
+          amount: dayTxs.filter(t => t.type === reportType).reduce((sum, t) => sum + t.amount, 0)
+        });
+      }
+    } else {
+      // Group by month
+      for (let i = 0; i < 12; i++) {
+        const monthTxs = filteredTransactions.filter(t => new Date(t.timestamp).getMonth() === i);
+        trendData.push({
+          name: `T${i + 1}`,
+          amount: monthTxs.filter(t => t.type === reportType).reduce((sum, t) => sum + t.amount, 0)
+        });
+      }
+    }
 
     return (
       <div className="px-6 py-8 max-w-lg mx-auto">
-        <h2 className="text-xl font-bold mb-6">Báo cáo tổng quan</h2>
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-xl font-bold">Báo cáo chi tiết</h2>
+        </div>
+
+        {/* Time Filter */}
+        <div className="flex gap-2 overflow-x-auto no-scrollbar mb-6 pb-2">
+          {[
+            { id: 'this_month', label: 'Tháng này' },
+            { id: 'last_month', label: 'Tháng trước' },
+            { id: 'this_year', label: 'Năm nay' },
+            { id: 'all_time', label: 'Tất cả' }
+          ].map(period => (
+            <button
+              key={period.id}
+              onClick={() => setReportPeriod(period.id as ReportPeriod)}
+              className={cn(
+                "px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors",
+                reportPeriod === period.id
+                  ? "bg-gray-900 text-white"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              )}
+            >
+              {period.label}
+            </button>
+          ))}
+        </div>
         
         <div className="grid grid-cols-2 gap-4 mb-8">
           <div className="bg-green-50 p-4 rounded-2xl border border-green-100">
@@ -652,16 +730,68 @@ export default function App() {
           </div>
         </div>
 
-        <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">Cơ cấu chi tiêu</h3>
-        {expenseData.length === 0 ? (
-          <p className="text-gray-400 text-center py-8">Chưa có dữ liệu chi tiêu.</p>
+        {/* Type Toggle */}
+        <div className="flex p-1 bg-gray-100 rounded-xl mb-6">
+          <button
+            onClick={() => setReportType('expense')}
+            className={cn(
+              "flex-1 py-2 rounded-lg text-sm font-medium transition-all",
+              reportType === 'expense' ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"
+            )}
+          >
+            Khoản Chi
+          </button>
+          <button
+            onClick={() => setReportType('income')}
+            className={cn(
+              "flex-1 py-2 rounded-lg text-sm font-medium transition-all",
+              reportType === 'income' ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"
+            )}
+          >
+            Khoản Thu
+          </button>
+        </div>
+
+        <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">
+          Xu hướng {reportType === 'expense' ? 'chi tiêu' : 'thu nhập'}
+        </h3>
+        <div className="h-48 mb-8 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={trendData}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+              <XAxis 
+                dataKey="name" 
+                axisLine={false} 
+                tickLine={false} 
+                tick={{ fontSize: 10, fill: '#9ca3af' }} 
+                dy={10}
+              />
+              <Tooltip 
+                formatter={(value: number) => formatCurrency(value)}
+                cursor={{ fill: '#f3f4f6' }}
+                contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+              />
+              <Bar 
+                dataKey="amount" 
+                fill={reportType === 'expense' ? '#ef4444' : '#10b981'} 
+                radius={[4, 4, 0, 0]} 
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">
+          Cơ cấu {reportType === 'expense' ? 'chi tiêu' : 'thu nhập'}
+        </h3>
+        {categoryData.length === 0 ? (
+          <p className="text-gray-400 text-center py-8">Chưa có dữ liệu.</p>
         ) : (
           <>
             <div className="h-64 mb-8">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={expenseData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={2}>
-                    {expenseData.map((entry, index) => (
+                  <Pie data={categoryData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={2}>
+                    {categoryData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>
@@ -671,15 +801,28 @@ export default function App() {
             </div>
             
             <div className="space-y-3">
-              {expenseData.map((item, index) => (
-                <div key={item.name} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
-                    <span className="text-sm text-gray-700">{item.name}</span>
+              {categoryData.map((item, index) => {
+                const Icon = CategoryIcons[item.name] || HelpCircle;
+                const percentage = ((item.value / (reportType === 'expense' ? totalExpense : totalIncome)) * 100).toFixed(1);
+                
+                return (
+                  <div key={item.name} className="flex items-center justify-between p-3 bg-white rounded-xl border border-gray-100 shadow-sm">
+                    <div className="flex items-center gap-3">
+                      <div 
+                        className="w-10 h-10 rounded-full flex items-center justify-center text-white"
+                        style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                      >
+                        <Icon className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <span className="text-sm font-medium text-gray-900 block">{item.name}</span>
+                        <span className="text-xs text-gray-500">{percentage}%</span>
+                      </div>
+                    </div>
+                    <span className="text-sm font-bold text-gray-900">{formatCurrency(item.value)}</span>
                   </div>
-                  <span className="text-sm font-medium">{formatCurrency(item.value)}</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}
