@@ -1,11 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Plus, Receipt, Coffee, Car, ShoppingBag, Zap, Film, Heart, Book, Home, HelpCircle, X, Loader2, Clock, ImageIcon, BarChart3, ArrowDownCircle, ArrowUpCircle, Wallet, Gift, Briefcase, Trash2, Edit2, Download, Share2, MapPin, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Camera, Plus, Receipt, Coffee, Car, ShoppingBag, Zap, Film, Heart, Book, Home, HelpCircle, X, Loader2, Clock, ImageIcon, BarChart3, ArrowDownCircle, ArrowUpCircle, Wallet, Gift, Briefcase, Trash2, Edit2, Download, Share2, MapPin, ChevronLeft, ChevronRight, Settings, Save, UploadCloud, Send } from 'lucide-react';
 import { format } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import exifr from 'exifr';
-import { cn, formatCurrency, fileToBase64, compressImage } from './lib/utils';
+import { cn, formatCurrency, fileToBase64, compressImage, dataURItoBlob } from './lib/utils';
 import { Transaction, EXPENSE_CATEGORIES, INCOME_CATEGORIES } from './types';
 import { get, set } from 'idb-keyval';
 
@@ -58,8 +58,31 @@ export default function App() {
   const [location, setLocation] = useState<string>('');
   const [showLocationSuggestions, setShowLocationSuggestions] = useState(false);
 
+  const [telegramToken, setTelegramToken] = useState(() => localStorage.getItem('snapspends_tele_token') || '');
+  const [telegramChatId, setTelegramChatId] = useState(() => localStorage.getItem('snapspends_tele_chat_id') || '');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [toast, setToast] = useState<{message: string, type: 'info' | 'success' | 'error'} | null>(null);
+  const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const showToast = (message: string, type: 'info' | 'success' | 'error') => {
+    setToast({ message, type });
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    if (type !== 'info') {
+      toastTimerRef.current = setTimeout(() => setToast(null), 3000);
+    }
+  };
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const touchStartX = useRef<number | null>(null);
+  const restoreFileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    localStorage.setItem('snapspends_tele_token', telegramToken);
+  }, [telegramToken]);
+
+  useEffect(() => {
+    localStorage.setItem('snapspends_tele_chat_id', telegramChatId);
+  }, [telegramChatId]);
 
   useEffect(() => {
     localStorage.setItem('snapspends_initial_balance', initialBalance.toString());
@@ -105,6 +128,11 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Revoke previous blob URL to prevent memory leaks
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+    }
+
     setCurrentImage(file);
     const url = URL.createObjectURL(file);
     setPreviewUrl(url);
@@ -114,10 +142,11 @@ export default function App() {
     setDescription('');
     setLocation('');
     
+    // Đặt lại input ngay lập tức để có thể chọn lại cùng một file ảnh
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-
+    
     // Try to extract GPS location
     try {
       let lat: number | null = null;
@@ -157,6 +186,123 @@ export default function App() {
     }
   };
 
+  const sendToTelegram = async (tx: Transaction, token: string, chatId: string) => {
+    if (!token || !chatId) return;
+
+    showToast('Đang chạy gửi Telegram...', 'info');
+    const typeStr = tx.type === 'expense' ? 'Chi' : 'Thu';
+    const amountStr = formatCurrency(tx.amount);
+    const descStr = tx.description ? ` (${tx.description})` : '';
+    const locStr = tx.location ? ` tại ${tx.location}` : '';
+    const textMsg = `💸 ${typeStr} ${tx.category}${descStr}${locStr} ${amountStr}`;
+
+    try {
+      const fetchPromise = tx.imageUrl && tx.imageUrl.startsWith('data:image') 
+        ? (async () => {
+            let blob;
+            let isPhoto = true;
+            try {
+              blob = dataURItoBlob(tx.imageUrl);
+            } catch (err) {
+              isPhoto = false;
+            }
+            if (isPhoto && blob) {
+              const formData = new FormData();
+              formData.append('chat_id', chatId);
+              formData.append('photo', blob, `receipt_${tx.id}.jpg`);
+              formData.append('caption', textMsg);
+              return fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+                method: 'POST',
+                body: formData
+              });
+            } else {
+              return fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: chatId, text: textMsg })
+              });
+            }
+          })()
+        : fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: textMsg })
+          });
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('TIMEOUT')), 15000);
+      });
+
+      const res = await Promise.race([fetchPromise, timeoutPromise]) as Response;
+
+      if (!res.ok) {
+         const errData = await res.json().catch(() => ({}));
+         console.error("Telegram API Error:", errData);
+         showToast(`Lỗi Telegram: ${errData.description || 'Không thể gửi'}`, 'error');
+         return;
+      }
+      
+      setTransactions(prev => prev.map(t => t.id === tx.id ? { ...t, telegramSent: true } : t));
+      showToast('Đã gửi lên Telegram thành công!', 'success');
+    } catch (e: any) {
+      console.error("Lỗi gửi Telegram", e);
+      if (e.message === 'TIMEOUT') {
+        showToast('Kết nối yếu, gửi Telegram quá thời gian', 'error');
+      } else {
+        showToast(`Lỗi mạng Telegram: ${e?.message || 'Kiểm tra lại kết nối'}`, 'error');
+      }
+    }
+  };
+
+  const sendBackupToTelegram = async () => {
+    if (!telegramToken || !telegramChatId) {
+      alert("Vui lòng cấu hình Telegram (Token & Chat ID) trước!");
+      return;
+    }
+    try {
+      const dataStr = JSON.stringify(transactions);
+      const blob = new Blob([dataStr], { type: 'application/json' });
+      const formData = new FormData();
+      formData.append('chat_id', telegramChatId);
+      formData.append('document', blob, `SnapSpends_Backup_${format(new Date(), 'yyyyMMdd_HHmm')}.json`);
+      formData.append('caption', `📦 Mới Backup dữ liệu SnapSpends!\n- Số lượng: ${transactions.length} giao dịch\n- Số dư đầu kỳ: ${formatCurrency(initialBalance)}`);
+
+      const res = await fetch(`https://api.telegram.org/bot${telegramToken}/sendDocument`, {
+        method: 'POST',
+        body: formData
+      });
+      if (res.ok) alert("Đã gửi file backup sang Telegram thành công!");
+      else alert("Lỗi khi gửi backup. Lỗi từ máy chủ Telegram.");
+    } catch (e) {
+      console.error("Lỗi backup", e);
+      alert("Đã xảy ra lỗi khi backup!");
+    }
+  };
+
+  const handleRestoreBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const result = event.target?.result as string;
+        const parsed = JSON.parse(result);
+        if (Array.isArray(parsed)) {
+          setTransactions(parsed);
+          alert("Đã khôi phục dữ liệu thành công!");
+          setIsSettingsOpen(false);
+          setCurrentTab('timeline');
+        } else {
+          alert("File không đúng định dạng backup (không phải là danh sách).");
+        }
+      } catch (err) {
+        alert("Nội dung file backup không hợp lệ hoặc bị hỏng!");
+      }
+    };
+    reader.readAsText(file);
+    if (restoreFileRef.current) restoreFileRef.current.value = '';
+  };
+
   const handleSave = async () => {
     const numericAmount = calculateAmount(expression);
     if (numericAmount <= 0 && !previewUrl && !currentImage) return;
@@ -168,7 +314,11 @@ export default function App() {
       
       // If there's a new image (currentImage is set), apply watermark
       if (currentImage && previewUrl) {
-        const compressed = await compressImage(previewUrl);
+        let compressed = await compressImage(previewUrl);
+        // Fallback to plain base64 if compression fails/times out
+        if (compressed.startsWith('blob:')) {
+          compressed = await fileToBase64(currentImage);
+        }
         finalOriginalUrl = compressed;
         finalImageUrl = compressed;
       } else if (editingTxId) {
@@ -204,11 +354,18 @@ export default function App() {
           originalImageUrl: finalOriginalUrl
         };
         setTransactions(prev => [newTx, ...prev]);
+        
+        if (telegramToken && telegramChatId) {
+          sendToTelegram(newTx, telegramToken, telegramChatId).catch(e => {
+            console.error("Failed to send telegram in background", e);
+          });
+        }
       }
       
       closeModal();
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error saving transaction:", error);
+      alert(`Lỗi khi lưu giao dịch: ${error?.message || 'Vui lòng thử lại.'}`);
     } finally {
       setIsSaving(false);
     }
@@ -218,6 +375,7 @@ export default function App() {
     setIsModalOpen(false);
     setTimeout(() => {
       setCurrentImage(null);
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
       setPreviewUrl(null);
       setExpression('');
       setShowKeypad(false);
@@ -226,6 +384,7 @@ export default function App() {
       setTxType('expense');
       setDetectedCategory(EXPENSE_CATEGORIES[0]);
       setEditingTxId(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }, 300);
   };
 
@@ -294,6 +453,46 @@ export default function App() {
     }
   };
 
+  const handleShare = async (tx: Transaction, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    try {
+      const typeStr = tx.type === 'expense' ? 'Chi' : 'Thu';
+      const descStr = tx.description ? ` (${tx.description})` : '';
+      const locStr = tx.location ? ` tại ${tx.location}` : '';
+      const amountStr = formatCurrency(tx.amount);
+      
+      const textLine = `${typeStr} ${tx.category}${descStr}${locStr} ${amountStr}`;
+
+      const shareData: any = {
+        title: 'Thông tin giao dịch',
+        text: textLine,
+      };
+
+      if (tx.imageUrl && navigator.canShare) {
+        try {
+          const res = await fetch(tx.imageUrl);
+          const blob = await res.blob();
+          const file = new File([blob], `giao-dich-${tx.id}.jpg`, { type: blob.type || 'image/jpeg' });
+          
+          if (navigator.canShare({ files: [file] })) {
+            shareData.files = [file];
+          }
+        } catch (fileErr) {
+          console.error("Cannot prepare file for sharing", fileErr);
+        }
+      }
+
+      if (navigator.share) {
+        await navigator.share(shareData);
+      } else {
+        await navigator.clipboard.writeText(textLine);
+        alert("Đã copy nội dung: " + textLine);
+      }
+    } catch (error) {
+      console.error("Lỗi khi chia sẻ:", error);
+    }
+  };
+
   const handleTouchStart = (e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX;
   };
@@ -355,12 +554,21 @@ export default function App() {
       <>
         <header className="bg-white px-6 py-8 shadow-sm sticky top-0 z-10">
           <div className="flex justify-between items-start mb-1">
-            <h1 className="text-sm font-medium text-gray-500 uppercase tracking-wider">
-              Số dư hiện tại
-            </h1>
-            <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-1 rounded-md">
-              {format(new Date(), "EEEE, d 'tháng' M", { locale: vi })}
-            </span>
+            <div>
+              <h1 className="text-sm font-medium text-gray-500 uppercase tracking-wider">
+                Số dư hiện tại
+              </h1>
+              <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-1 rounded-md mt-1 inline-block">
+                {format(new Date(), "EEEE, d 'tháng' M", { locale: vi })}
+              </span>
+            </div>
+            <button 
+              onClick={() => setIsSettingsOpen(true)}
+              className="p-2 bg-gray-50 rounded-full text-gray-500 hover:bg-gray-100 transition-colors"
+              title="Cài đặt"
+            >
+              <Settings className="w-5 h-5" />
+            </button>
           </div>
           
           {isEditingBalance ? (
@@ -485,15 +693,42 @@ export default function App() {
                               {isIncome ? '+' : '-'}{formatCurrency(tx.amount)}
                             </span>
                             <div className="flex items-center gap-1 -mr-2">
+                              {(telegramToken && telegramChatId) && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (!tx.telegramSent) {
+                                      sendToTelegram(tx, telegramToken, telegramChatId);
+                                    }
+                                  }}
+                                  className={cn("transition-colors p-1.5", 
+                                    tx.telegramSent 
+                                      ? (tx.imageUrl ? "text-blue-400 drop-shadow-md" : "text-blue-500")
+                                      : (tx.imageUrl ? "text-white/40 hover:text-white/80 drop-shadow-md" : "text-gray-300 hover:text-gray-500")
+                                  )}
+                                  title={tx.telegramSent ? "Đã gửi Telegram" : "Gửi lại Telegram"}
+                                >
+                                  <Send className="w-4 h-4" />
+                                </button>
+                              )}
+                              <button 
+                                onClick={(e) => handleShare(tx, e)}
+                                className={cn("transition-colors p-1.5", tx.imageUrl ? "text-white/80 hover:text-green-400 drop-shadow-md" : "text-gray-300 hover:text-green-500")}
+                                title="Chia sẻ"
+                              >
+                                <Share2 className="w-4 h-4" />
+                              </button>
                               <button 
                                 onClick={(e) => { e.stopPropagation(); handleEdit(tx); }}
                                 className={cn("transition-colors p-1.5", tx.imageUrl ? "text-white/80 hover:text-white drop-shadow-md" : "text-gray-300 hover:text-blue-500")}
+                                title="Sửa"
                               >
                                 <Edit2 className="w-4 h-4" />
                               </button>
                               <button 
                                 onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(tx.id); }}
                                 className={cn("transition-colors p-1.5", tx.imageUrl ? "text-white/80 hover:text-red-400 drop-shadow-md" : "text-gray-300 hover:text-red-500")}
+                                title="Xóa"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>
@@ -846,7 +1081,28 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 pb-24 font-sans">
+    <div className="min-h-screen bg-gray-50 text-gray-900 pb-24 font-sans relative">
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] px-4 w-full max-w-sm pointer-events-none"
+          >
+            <div className={cn(
+              "px-4 py-3 rounded-2xl shadow-xl flex items-center gap-3 w-full backdrop-blur-md text-white font-medium text-sm",
+              toast.type === 'error' ? "bg-red-500/95" : 
+              toast.type === 'success' ? "bg-green-500/95" : "bg-gray-900/95"
+            )}>
+              {toast.type === 'error' && <X className="w-5 h-5 shrink-0" />}
+              {toast.type === 'success' && <div className="w-5 h-5 shrink-0 flex items-center justify-center bg-white/20 rounded-full"><span className="text-white text-xs">✓</span></div>}
+              {toast.type === 'info' && <Loader2 className="w-5 h-5 shrink-0 animate-spin" />}
+              <span className="flex-1 drop-shadow-sm">{toast.message}</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       
       {currentTab === 'timeline' && renderTimeline()}
       {currentTab === 'gallery' && renderGallery()}
@@ -908,11 +1164,39 @@ export default function App() {
               {currentImageIndex !== -1 && (
                 <button 
                   className="p-2 text-white/70 hover:text-white bg-black/50 rounded-full transition-colors"
+                  onClick={(e) => handleShare(imageTransactions[currentImageIndex], e)}
+                  title="Chia sẻ"
+                >
+                  <Share2 className="w-6 h-6" />
+                </button>
+              )}
+              {currentImageIndex !== -1 && telegramToken && telegramChatId && (
+                <button 
+                  className={cn("p-2 rounded-full transition-colors", 
+                    imageTransactions[currentImageIndex].telegramSent 
+                      ? "text-blue-400 bg-black/50" 
+                      : "text-white/70 hover:text-white bg-black/50"
+                  )}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!imageTransactions[currentImageIndex].telegramSent) {
+                      sendToTelegram(imageTransactions[currentImageIndex], telegramToken, telegramChatId);
+                    }
+                  }}
+                  title={imageTransactions[currentImageIndex].telegramSent ? "Đã gửi Telegram" : "Gửi lại Telegram"}
+                >
+                  <Send className="w-6 h-6" />
+                </button>
+              )}
+              {currentImageIndex !== -1 && (
+                <button 
+                  className="p-2 text-white/70 hover:text-white bg-black/50 rounded-full transition-colors"
                   onClick={(e) => {
                     e.stopPropagation();
                     handleEdit(imageTransactions[currentImageIndex]);
                     setSelectedImage(null);
                   }}
+                  title="Sửa"
                 >
                   <Edit2 className="w-6 h-6" />
                 </button>
@@ -1099,7 +1383,10 @@ export default function App() {
                 {/* Category Selection */}
                 <div>
                   <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Danh mục</label>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div 
+                    className="flex overflow-x-auto snap-x snap-mandatory gap-2 pb-2 [&::-webkit-scrollbar]:hidden" 
+                    style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+                  >
                     {(txType === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES).map(cat => {
                       const Icon = CategoryIcons[cat] || HelpCircle;
                       const isSelected = detectedCategory === cat;
@@ -1108,7 +1395,7 @@ export default function App() {
                           key={cat}
                           onClick={() => setDetectedCategory(cat)}
                           className={cn(
-                            "flex flex-col items-center justify-center py-3 px-2 rounded-xl border transition-all",
+                            "flex-none w-[calc((100%-16px)/3)] snap-start flex flex-col items-center justify-center py-3 px-2 rounded-xl border transition-all",
                             isSelected 
                               ? (txType === 'income' ? "bg-green-600 border-green-600 text-white" : "bg-red-600 border-red-600 text-white")
                               : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
@@ -1225,7 +1512,12 @@ export default function App() {
                     txType === 'income' ? "bg-green-600 hover:bg-green-700" : "bg-red-600 hover:bg-red-700"
                   )}
                 >
-                  {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : "Lưu giao dịch"}
+                  {isSaving ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin mr-2" /> 
+                      {telegramToken && telegramChatId ? "Đang lưu & gửi Telegram..." : "Đang lưu..."}
+                    </>
+                  ) : "Lưu giao dịch"}
                 </button>
               </div>
             </motion.div>
@@ -1273,6 +1565,89 @@ export default function App() {
                 >
                   Xóa
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {isSettingsOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl w-full max-w-sm shadow-xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="flex justify-between items-center p-5 border-b border-gray-100 shrink-0">
+                <h2 className="text-lg font-bold">Cài đặt</h2>
+                <button onClick={() => setIsSettingsOpen(false)} className="p-2 bg-gray-50 rounded-full text-gray-500 hover:bg-gray-100">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              
+              <div className="p-6 overflow-y-auto space-y-6">
+                <div>
+                  <h3 className="text-base font-semibold mb-1 text-blue-600 flex items-center gap-2">
+                    <Share2 className="w-4 h-4" /> Telegram Bot
+                  </h3>
+                  <p className="text-xs text-gray-500 mb-4">Tự động gửi thông báo khi có giao dịch mới vào nhóm/bot Telegram.</p>
+                  
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Bot Token</label>
+                      <input 
+                        type="text" 
+                        value={telegramToken}
+                        onChange={(e) => setTelegramToken(e.target.value)}
+                        placeholder="VD: 123456789:ABCdefGHIjkl..."
+                        className="w-full bg-gray-50 border border-gray-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Chat ID</label>
+                      <input 
+                        type="text" 
+                        value={telegramChatId}
+                        onChange={(e) => setTelegramChatId(e.target.value)}
+                        placeholder="VD: 123456789 hoặc -100123456"
+                        className="w-full bg-gray-50 border border-gray-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-gray-100">
+                  <h3 className="text-base font-semibold mb-1 text-gray-900 flex items-center gap-2">
+                    <Save className="w-4 h-4" /> Sao lưu & Khôi phục
+                  </h3>
+                  <p className="text-xs text-gray-500 mb-4">Gửi bản sao lưu dữ liệu toàn bộ ứng dụng sang Telegram.</p>
+                  
+                  <div className="flex flex-col gap-3">
+                    <button 
+                      onClick={sendBackupToTelegram}
+                      className="w-full flex items-center justify-center gap-2 py-3 bg-blue-50 text-blue-600 rounded-xl font-medium text-sm hover:bg-blue-100 transition-colors"
+                    >
+                      <UploadCloud className="w-4 h-4" /> Gửi Backup lên Telegram
+                    </button>
+                    
+                    <button 
+                      onClick={() => restoreFileRef.current?.click()}
+                      className="w-full flex items-center justify-center gap-2 py-3 bg-gray-50 text-gray-700 rounded-xl font-medium text-sm hover:bg-gray-100 transition-colors border border-gray-200"
+                    >
+                      <Download className="w-4 h-4" /> Khôi phục từ File
+                    </button>
+                    <input 
+                      type="file" 
+                      accept=".json"
+                      className="hidden" 
+                      ref={restoreFileRef}
+                      onChange={handleRestoreBackup}
+                    />
+                  </div>
+                </div>
               </div>
             </motion.div>
           </div>

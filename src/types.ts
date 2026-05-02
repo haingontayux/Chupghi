@@ -8,6 +8,7 @@ export interface Transaction {
   imageUrl: string;
   originalImageUrl?: string;
   location?: string;
+  telegramSent?: boolean;
 }
 
 export const EXPENSE_CATEGORIES = [
