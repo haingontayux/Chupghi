@@ -37,6 +37,7 @@ export default function App() {
   const [reportPeriod, setReportPeriod] = useState<ReportPeriod>('this_month');
   const [reportType, setReportType] = useState<'expense' | 'income'>('expense');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [showImageSourcePicker, setShowImageSourcePicker] = useState(false);
   const [currentImage, setCurrentImage] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -73,6 +74,7 @@ export default function App() {
   };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
   const touchStartX = useRef<number | null>(null);
   const restoreFileRef = useRef<HTMLInputElement>(null);
 
@@ -145,6 +147,9 @@ export default function App() {
     // Đặt lại input ngay lập tức để có thể chọn lại cùng một file ảnh
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+    if (galleryInputRef.current) {
+      galleryInputRef.current.value = '';
     }
     
     // Try to extract GPS location
@@ -1125,10 +1130,11 @@ export default function App() {
           <div className="flex-1 flex justify-center relative">
             <div className="absolute -top-10">
               <button 
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => setShowImageSourcePicker(true)}
                 className="w-14 h-14 bg-gray-900 text-white rounded-full flex items-center justify-center shadow-lg hover:bg-gray-800 active:scale-95 transition-all border-4 border-white"
+                title="Chụp ảnh mới"
               >
-                <Camera className="w-6 h-6" />
+                <Camera className="w-6 h-6 flex-shrink-0" />
               </button>
               <input 
                 type="file" 
@@ -1136,6 +1142,13 @@ export default function App() {
                 capture="environment" 
                 className="hidden" 
                 ref={fileInputRef}
+                onChange={handleFileChange}
+              />
+              <input 
+                type="file" 
+                accept="image/*" 
+                className="hidden" 
+                ref={galleryInputRef}
                 onChange={handleFileChange}
               />
             </div>
@@ -1287,6 +1300,59 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {showImageSourcePicker && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[70] bg-black/40 backdrop-blur-sm"
+              onClick={() => setShowImageSourcePicker(false)}
+            />
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="fixed bottom-0 left-0 right-0 z-[80] bg-white rounded-t-3xl shadow-xl overflow-hidden"
+              style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 16px)' }}
+            >
+              <div className="w-12 h-1.5 bg-gray-200 rounded-full mx-auto my-4" />
+              <div className="px-6 pb-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">Thêm ảnh thu chi</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <button
+                    onClick={() => {
+                      setShowImageSourcePicker(false);
+                      fileInputRef.current?.click();
+                    }}
+                    className="flex flex-col items-center justify-center gap-3 p-6 bg-gray-50 rounded-2xl border border-gray-100 active:bg-gray-100 transition-colors"
+                  >
+                    <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center">
+                      <Camera className="w-6 h-6" />
+                    </div>
+                    <span className="font-medium text-gray-700">Mở Máy ảnh</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowImageSourcePicker(false);
+                      galleryInputRef.current?.click();
+                    }}
+                    className="flex flex-col items-center justify-center gap-3 p-6 bg-gray-50 rounded-2xl border border-gray-100 active:bg-gray-100 transition-colors"
+                  >
+                    <div className="w-12 h-12 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center">
+                      <ImageIcon className="w-6 h-6" />
+                    </div>
+                    <span className="font-medium text-gray-700">Chọn Thư viện</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
       {/* Add Transaction Modal */}
       <AnimatePresence>
         {isModalOpen && (
@@ -1371,13 +1437,16 @@ export default function App() {
                   </div>
 
                   {/* Change Image Button */}
-                  <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="absolute bottom-3 right-3 bg-black/50 backdrop-blur-md text-white px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1.5 hover:bg-black/70 transition-colors"
-                  >
-                    <Camera className="w-4 h-4" />
-                    Đổi ảnh
-                  </button>
+                  <div className="absolute bottom-3 right-3 flex gap-2">
+                    <button 
+                      onClick={() => setShowImageSourcePicker(true)}
+                      className="bg-black/50 backdrop-blur-md text-white px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1.5 hover:bg-black/70 transition-colors"
+                      title="Đổi ảnh"
+                    >
+                      <Camera className="w-4 h-4" />
+                      Đổi ảnh
+                    </button>
+                  </div>
                 </div>
 
                 {/* Category Selection */}
