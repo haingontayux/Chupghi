@@ -27,7 +27,7 @@ const CategoryIcons: Record<string, any> = {
 };
 
 type Tab = 'timeline' | 'gallery' | 'report';
-type ReportPeriod = 'this_month' | 'last_month' | 'this_year' | 'all_time';
+type ReportPeriod = 'today' | 'yesterday' | 'this_week' | 'this_month' | 'last_month' | 'this_year' | 'all_time' | 'custom';
 
 export default function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -35,6 +35,7 @@ export default function App() {
 
   const [currentTab, setCurrentTab] = useState<Tab>('timeline');
   const [reportPeriod, setReportPeriod] = useState<ReportPeriod>('this_month');
+  const [customDateRange, setCustomDateRange] = useState<{start: Date | null, end: Date | null}>({ start: null, end: null });
   const [reportType, setReportType] = useState<'expense' | 'income'>('expense');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [showImageSourcePicker, setShowImageSourcePicker] = useState(false);
@@ -803,6 +804,9 @@ export default function App() {
           <div className="space-y-8">
             {sortedDates.map(date => {
               const { income, expense } = groupedTransactions[date];
+              const totalIncome = income.reduce((sum, tx) => sum + tx.amount, 0);
+              const totalExpense = expense.reduce((sum, tx) => sum + tx.amount, 0);
+              
               return (
                 <div key={date} className="space-y-4">
                   <div className="sticky top-0 bg-gray-50/95 backdrop-blur-sm py-2 z-10 border-b border-gray-200">
@@ -812,7 +816,10 @@ export default function App() {
                   {/* Expense Section */}
                   {expense.length > 0 && (
                     <div>
-                      <h4 className="text-xs font-medium text-red-600 uppercase tracking-wider mb-2 px-1">Khoản Chi</h4>
+                      <div className="flex justify-between items-center mb-2 px-1">
+                        <h4 className="text-xs font-medium text-red-600 uppercase tracking-wider">Khoản Chi</h4>
+                        <span className="text-xs font-bold text-red-600">{formatCurrency(totalExpense)}</span>
+                      </div>
                       <div className="grid grid-cols-3 gap-2">
                         {expense.map(tx => (
                           <div 
@@ -837,7 +844,10 @@ export default function App() {
                   {/* Income Section */}
                   {income.length > 0 && (
                     <div>
-                      <h4 className="text-xs font-medium text-green-600 uppercase tracking-wider mb-2 px-1 mt-4">Khoản Thu</h4>
+                      <div className="flex justify-between items-center mb-2 px-1 mt-4">
+                        <h4 className="text-xs font-medium text-green-600 uppercase tracking-wider">Khoản Thu</h4>
+                        <span className="text-xs font-bold text-green-600">{formatCurrency(totalIncome)}</span>
+                      </div>
                       <div className="grid grid-cols-3 gap-2">
                         {income.map(tx => (
                           <div 
@@ -872,7 +882,21 @@ export default function App() {
     
     const filteredTransactions = transactions.filter(t => {
       const txDate = new Date(t.timestamp);
+      // standardize to start of day for easier comparison
+      const txStartOfDay = new Date(txDate.getFullYear(), txDate.getMonth(), txDate.getDate());
+      const nowStartOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
       switch (reportPeriod) {
+        case 'today':
+          return txStartOfDay.getTime() === nowStartOfDay.getTime();
+        case 'yesterday':
+          const yesterday = new Date(nowStartOfDay.getTime() - 24 * 60 * 60 * 1000);
+          return txStartOfDay.getTime() === yesterday.getTime();
+        case 'this_week':
+          const day = nowStartOfDay.getDay(); // 0 is Sunday
+          const diff = nowStartOfDay.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
+          const startOfWeek = new Date(nowStartOfDay.setDate(diff));
+          return txStartOfDay.getTime() >= startOfWeek.getTime();
         case 'this_month':
           return txDate.getMonth() === now.getMonth() && txDate.getFullYear() === now.getFullYear();
         case 'last_month':
@@ -880,6 +904,19 @@ export default function App() {
           return txDate.getMonth() === lastMonth.getMonth() && txDate.getFullYear() === lastMonth.getFullYear();
         case 'this_year':
           return txDate.getFullYear() === now.getFullYear();
+        case 'custom':
+          if (customDateRange.start && customDateRange.end) {
+            const endOfDay = new Date(customDateRange.end.getFullYear(), customDateRange.end.getMonth(), customDateRange.end.getDate(), 23, 59, 59, 999);
+            return txDate.getTime() >= customDateRange.start.getTime() && txDate.getTime() <= endOfDay.getTime();
+          }
+          if (customDateRange.start) {
+             return txDate.getTime() >= customDateRange.start.getTime();
+          }
+          if (customDateRange.end) {
+             const endOfDay = new Date(customDateRange.end.getFullYear(), customDateRange.end.getMonth(), customDateRange.end.getDate(), 23, 59, 59, 999);
+             return txDate.getTime() <= endOfDay.getTime();
+          }
+          return true;
         case 'all_time':
         default:
           return true;
@@ -935,18 +972,22 @@ export default function App() {
         </div>
 
         {/* Time Filter */}
-        <div className="flex gap-2 overflow-x-auto no-scrollbar mb-6 pb-2">
+        <div className="flex gap-2 overflow-x-auto snap-x snap-mandatory pb-2 mb-6 [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
           {[
+            { id: 'today', label: 'Hôm nay' },
+            { id: 'yesterday', label: 'Hôm qua' },
+            { id: 'this_week', label: 'Tuần này' },
             { id: 'this_month', label: 'Tháng này' },
             { id: 'last_month', label: 'Tháng trước' },
             { id: 'this_year', label: 'Năm nay' },
-            { id: 'all_time', label: 'Tất cả' }
+            { id: 'all_time', label: 'Tất cả' },
+            { id: 'custom', label: 'Tùy chọn' }
           ].map(period => (
             <button
               key={period.id}
               onClick={() => setReportPeriod(period.id as ReportPeriod)}
               className={cn(
-                "px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors",
+                "px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors snap-start",
                 reportPeriod === period.id
                   ? "bg-gray-900 text-white"
                   : "bg-gray-100 text-gray-600 hover:bg-gray-200"
@@ -956,6 +997,29 @@ export default function App() {
             </button>
           ))}
         </div>
+        
+        {reportPeriod === 'custom' && (
+          <div className="flex gap-4 mb-6">
+             <div className="flex-1">
+               <label className="block text-xs font-medium text-gray-500 mb-1">Từ ngày</label>
+               <input 
+                 type="date" 
+                 className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-black outline-none"
+                 value={customDateRange.start ? format(customDateRange.start, 'yyyy-MM-dd') : ''}
+                 onChange={(e) => setCustomDateRange(prev => ({ ...prev, start: e.target.value ? new Date(e.target.value) : null }))}
+               />
+             </div>
+             <div className="flex-1">
+               <label className="block text-xs font-medium text-gray-500 mb-1">Đến ngày</label>
+               <input 
+                 type="date" 
+                 className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-black outline-none"
+                 value={customDateRange.end ? format(customDateRange.end, 'yyyy-MM-dd') : ''}
+                 onChange={(e) => setCustomDateRange(prev => ({ ...prev, end: e.target.value ? new Date(e.target.value) : null }))}
+               />
+             </div>
+          </div>
+        )}
         
         <div className="grid grid-cols-2 gap-4 mb-8">
           <div className="bg-green-50 p-4 rounded-2xl border border-green-100">
