@@ -260,27 +260,33 @@ export default function App() {
     }
   };
 
-  const sendBackupToTelegram = async () => {
+  const sendBackupToTelegram = async (includeImages: boolean = true) => {
     if (!telegramToken || !telegramChatId) {
       alert("Vui lòng cấu hình Telegram (Token & Chat ID) trước!");
       return;
     }
+    showToast('Đang tạo file backup...', 'info');
     try {
-      const dataStr = JSON.stringify(transactions);
+      const backupData = includeImages 
+        ? transactions 
+        : transactions.map(t => ({ ...t, imageUrl: undefined, originalImageUrl: undefined }));
+        
+      const dataStr = JSON.stringify(backupData);
       const blob = new Blob([dataStr], { type: 'application/json' });
       const formData = new FormData();
       formData.append('chat_id', telegramChatId);
-      formData.append('document', blob, `SnapSpends_Backup_${format(new Date(), 'yyyyMMdd_HHmm')}.json`);
-      formData.append('caption', `📦 Mới Backup dữ liệu SnapSpends!\n- Số lượng: ${transactions.length} giao dịch\n- Số dư đầu kỳ: ${formatCurrency(initialBalance)}`);
+      formData.append('document', blob, `SnapSpends_Backup_${includeImages ? 'Full' : 'Lite'}_${format(new Date(), 'yyyyMMdd_HHmm')}.json`);
+      formData.append('caption', `📦 Mới Backup dữ liệu SnapSpends!\n- Loại: ${includeImages ? 'Đầy đủ' : 'Nhẹ (Không ảnh)'}\n- Số lượng: ${transactions.length} giao dịch\n- Số dư đầu kỳ: ${formatCurrency(initialBalance)}`);
 
       const res = await fetch(`https://api.telegram.org/bot${telegramToken}/sendDocument`, {
         method: 'POST',
         body: formData
       });
-      if (res.ok) alert("Đã gửi file backup sang Telegram thành công!");
-      else alert("Lỗi khi gửi backup. Lỗi từ máy chủ Telegram.");
+      if (res.ok) showToast("Đã gửi file backup sang Telegram thành công!", 'success');
+      else showToast("Lỗi khi gửi backup. Lỗi từ máy chủ Telegram.", 'error');
     } catch (e) {
       console.error("Lỗi backup", e);
+
       alert("Đã xảy ra lỗi khi backup!");
     }
   };
@@ -1851,10 +1857,34 @@ export default function App() {
                   
                   <div className="flex flex-col gap-3">
                     <button 
-                      onClick={sendBackupToTelegram}
+                      onClick={() => sendBackupToTelegram(true)}
                       className="w-full flex items-center justify-center gap-2 py-3 bg-blue-50 text-blue-600 rounded-xl font-medium text-sm hover:bg-blue-100 transition-colors"
                     >
-                      <UploadCloud className="w-4 h-4" /> Gửi Backup lên Telegram
+                      <UploadCloud className="w-4 h-4" /> Gửi Backup (Đầy đủ)
+                    </button>
+                    
+                    <button 
+                      onClick={() => sendBackupToTelegram(false)}
+                      className="w-full flex items-center justify-center gap-2 py-3 bg-indigo-50 text-indigo-600 rounded-xl font-medium text-sm hover:bg-indigo-100 transition-colors"
+                    >
+                      <UploadCloud className="w-4 h-4" /> Gửi Backup (Bỏ qua ảnh để nhẹ hơn)
+                    </button>
+
+                    <button 
+                      onClick={() => {
+                        const dataStr = JSON.stringify(transactions);
+                        const blob = new Blob([dataStr], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `SnapSpends_Backup_Device_${format(new Date(), 'yyyyMMdd_HHmm')}.json`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        showToast('Đã tải file backup về máy!', 'success');
+                      }}
+                      className="w-full flex items-center justify-center gap-2 py-3 bg-orange-50 text-orange-600 rounded-xl font-medium text-sm hover:bg-orange-100 transition-colors mt-2"
+                    >
+                      <Download className="w-4 h-4" /> Tải Backup về máy (Đầy đủ)
                     </button>
                     
                     <button 
