@@ -1,11 +1,11 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Camera, Plus, Receipt, Coffee, Car, ShoppingBag, Zap, Film, Heart, Book, Home, HelpCircle, X, Loader2, Clock, ImageIcon, BarChart3, ArrowDownCircle, ArrowUpCircle, Wallet, Gift, Briefcase, Trash2, Edit2, Download, Share2, MapPin, ChevronLeft, ChevronRight, Settings, Save, UploadCloud, Send } from 'lucide-react';
 import { format } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import exifr from 'exifr';
-import { cn, formatCurrency, fileToBase64, compressImage, dataURItoBlob } from './lib/utils';
+import { cn, formatCurrency, fileToBase64, compressImage, addTimemarkOverlay, dataURItoBlob } from './lib/utils';
 import { Transaction, EXPENSE_CATEGORIES, INCOME_CATEGORIES } from './types';
 import { get, set } from 'idb-keyval';
 
@@ -311,22 +311,73 @@ export default function App() {
 
   const handleSave = async () => {
     const numericAmount = calculateAmount(expression);
-    if (numericAmount <= 0 && !previewUrl && !currentImage) return;
+    if (numericAmount <= 0) return;
     setIsSaving(true);
 
     try {
       let finalImageUrl = previewUrl || '';
       let finalOriginalUrl = undefined;
       
-      // If there's a new image (currentImage is set), apply watermark
-      if (currentImage && previewUrl) {
+      if (!previewUrl && !currentImage) {
+        // Generate placeholder image based on description or category
+        const canvas = document.createElement('canvas');
+        canvas.width = 800;
+        canvas.height = 800;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          const grad = ctx.createLinearGradient(0, 0, 800, 800);
+          if (txType === 'income') {
+             grad.addColorStop(0, '#10b981');
+             grad.addColorStop(1, '#047857');
+          } else {
+             grad.addColorStop(0, '#f43f5e');
+             grad.addColorStop(1, '#be123c');
+          }
+          ctx.fillStyle = grad;
+          ctx.fillRect(0, 0, 800, 800);
+          
+          ctx.fillStyle = 'white';
+          ctx.font = 'bold 50px sans-serif';
+          ctx.textAlign = 'center';
+          
+          const textToDraw = description.trim() || detectedCategory;
+          const words = textToDraw.split(' ');
+          let line = '';
+          let y = 350;
+          for(let i = 0; i < words.length; i++) {
+            const testLine = line + words[i] + ' ';
+            const metrics = ctx.measureText(testLine);
+            if (metrics.width > 700 && i > 0) {
+              ctx.fillText(line.trim(), 400, y);
+              line = words[i] + ' ';
+              y += 70;
+            } else {
+              line = testLine;
+            }
+          }
+          ctx.fillText(line.trim(), 400, y);
+          
+          ctx.font = 'bold 70px sans-serif';
+          ctx.fillText((txType === 'income' ? '+' : '-') + formatCurrency(numericAmount), 400, y + 100);
+
+          finalImageUrl = canvas.toDataURL('image/jpeg', 0.8);
+          finalOriginalUrl = finalImageUrl;
+        }
+      } else if (currentImage && previewUrl) {
         let compressed = await compressImage(previewUrl);
         // Fallback to plain base64 if compression fails/times out
         if (compressed.startsWith('blob:')) {
           compressed = await fileToBase64(currentImage);
         }
         finalOriginalUrl = compressed;
-        finalImageUrl = compressed;
+        
+        // Add Timemark watermark
+        try {
+          finalImageUrl = await addTimemarkOverlay(compressed, location, Date.now(), numericAmount, txType, description);
+        } catch (err) {
+          console.error("Watermark error", err);
+          finalImageUrl = compressed;
+        }
       } else if (editingTxId) {
         // If editing but no new image, keep existing images
         const existingTx = transactions.find(t => t.id === editingTxId);
@@ -405,6 +456,13 @@ export default function App() {
     setPreviewUrl(tx.imageUrl || null);
     setIsModalOpen(true);
   };
+
+  const suggestedDescriptions = useMemo(() => {
+    const allDescs = transactions.map(t => t.description).filter(Boolean) as string[];
+    const uniqueDescs = Array.from(new Set(allDescs));
+    if (!description.trim()) return uniqueDescs.slice(0, 5);
+    return uniqueDescs.filter(d => d.toLowerCase().includes(description.toLowerCase()) && d !== description).slice(0, 5);
+  }, [transactions, description]);
 
   const calculateAmount = (expr: string) => {
     try {
@@ -879,23 +937,25 @@ export default function App() {
 
   const renderReport = () => {
     const now = new Date();
+    const nowStartOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(nowStartOfDay.getTime() - 24 * 60 * 60 * 1000);
     
+    // Calculate start of week (Monday)
+    const day = nowStartOfDay.getDay();
+    const diff = nowStartOfDay.getDate() - day + (day === 0 ? -6 : 1);
+    const startOfWeek = new Date(nowStartOfDay.getTime());
+    startOfWeek.setDate(diff);
+
     const filteredTransactions = transactions.filter(t => {
       const txDate = new Date(t.timestamp);
-      // standardize to start of day for easier comparison
       const txStartOfDay = new Date(txDate.getFullYear(), txDate.getMonth(), txDate.getDate());
-      const nowStartOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
       switch (reportPeriod) {
         case 'today':
           return txStartOfDay.getTime() === nowStartOfDay.getTime();
         case 'yesterday':
-          const yesterday = new Date(nowStartOfDay.getTime() - 24 * 60 * 60 * 1000);
           return txStartOfDay.getTime() === yesterday.getTime();
         case 'this_week':
-          const day = nowStartOfDay.getDay(); // 0 is Sunday
-          const diff = nowStartOfDay.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
-          const startOfWeek = new Date(nowStartOfDay.setDate(diff));
           return txStartOfDay.getTime() >= startOfWeek.getTime();
         case 'this_month':
           return txDate.getMonth() === now.getMonth() && txDate.getFullYear() === now.getFullYear();
@@ -1384,31 +1444,49 @@ export default function App() {
             >
               <div className="w-12 h-1.5 bg-gray-200 rounded-full mx-auto my-4" />
               <div className="px-6 pb-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Thêm ảnh thu chi</h3>
-                <div className="grid grid-cols-2 gap-4">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">Thêm thu chi mới</h3>
+                <div className="grid grid-cols-3 gap-4">
+                  <button
+                    onClick={() => {
+                      setShowImageSourcePicker(false);
+                      setIsModalOpen(true);
+                      setExpression('');
+                      setShowKeypad(true);
+                      setDescription('');
+                      setLocation('');
+                      setCurrentImage(null);
+                      setPreviewUrl(null);
+                    }}
+                    className="flex flex-col items-center justify-center gap-3 p-4 py-6 bg-gray-50 rounded-2xl border border-gray-100 active:bg-gray-100 transition-colors"
+                  >
+                    <div className="w-12 h-12 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center">
+                      <Edit2 className="w-6 h-6" />
+                    </div>
+                    <span className="font-medium text-gray-700 text-center text-sm">Nhập tay</span>
+                  </button>
                   <button
                     onClick={() => {
                       setShowImageSourcePicker(false);
                       fileInputRef.current?.click();
                     }}
-                    className="flex flex-col items-center justify-center gap-3 p-6 bg-gray-50 rounded-2xl border border-gray-100 active:bg-gray-100 transition-colors"
+                    className="flex flex-col items-center justify-center gap-3 p-4 py-6 bg-gray-50 rounded-2xl border border-gray-100 active:bg-gray-100 transition-colors"
                   >
                     <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center">
                       <Camera className="w-6 h-6" />
                     </div>
-                    <span className="font-medium text-gray-700">Mở Máy ảnh</span>
+                    <span className="font-medium text-gray-700 text-center text-sm">Máy ảnh</span>
                   </button>
                   <button
                     onClick={() => {
                       setShowImageSourcePicker(false);
                       galleryInputRef.current?.click();
                     }}
-                    className="flex flex-col items-center justify-center gap-3 p-6 bg-gray-50 rounded-2xl border border-gray-100 active:bg-gray-100 transition-colors"
+                    className="flex flex-col items-center justify-center gap-3 p-4 py-6 bg-gray-50 rounded-2xl border border-gray-100 active:bg-gray-100 transition-colors"
                   >
                     <div className="w-12 h-12 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center">
                       <ImageIcon className="w-6 h-6" />
                     </div>
-                    <span className="font-medium text-gray-700">Chọn Thư viện</span>
+                    <span className="font-medium text-gray-700 text-center text-sm">Thư viện</span>
                   </button>
                 </div>
               </div>
@@ -1551,8 +1629,21 @@ export default function App() {
                     onChange={(e) => setDescription(e.target.value)}
                     onFocus={() => setShowKeypad(false)}
                     placeholder="VD: Cà phê sáng..."
-                    className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-300 transition-all"
+                    className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-300 transition-all mb-2"
                   />
+                  {suggestedDescriptions.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {suggestedDescriptions.map((desc, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => setDescription(desc)}
+                          className="px-3 py-1.5 bg-gray-100 text-gray-700 text-xs rounded-lg hover:bg-gray-200 transition-colors border border-gray-200"
+                        >
+                          {desc}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Location Input */}
